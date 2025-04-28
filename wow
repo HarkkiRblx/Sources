@@ -1,0 +1,149 @@
+using System;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+
+namespace LocalListener
+{
+    class Program
+    {
+        static readonly string url = "http://localhost:8080/api/1.3/";
+        static readonly bool UseRandomToken = true;  // true = random token, false = fixed
+        static readonly string FixedToken = "fixed_public_token_123456";
+        static readonly Random rng = new Random();
+
+        static async Task Main(string[] args)
+        {
+            HttpListener listener = new HttpListener();
+            listener.Prefixes.Add(url);
+            listener.Start();
+
+            // Print server start message
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"[H] Server started. {url}");
+            Console.ResetColor();
+
+            while (true)
+            {
+                try
+                {
+                    HttpListenerContext context = await listener.GetContextAsync();
+                    _ = Task.Run(() => HandleRequest(context));
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Server error: {ex.Message}");
+                }
+            }
+        }
+
+        static async Task HandleRequest(HttpListenerContext context)
+        {
+            try
+            {
+                HttpListenerRequest request = context.Request;
+                string username = GenerateRandomUsername();
+                string password = GenerateRandomPassword();
+
+                // Simulate a small delay to make the server feel more real
+                await Task.Delay(rng.Next(200, 800));
+
+                if (request.HasEntityBody)
+                {
+                    using (Stream body = request.InputStream)
+                    using (StreamReader reader = new StreamReader(body, request.ContentEncoding))
+                    {
+                        string bodyText = await reader.ReadToEndAsync();
+
+                        try
+                        {
+                            var jsonDoc = JsonDocument.Parse(bodyText);
+                            var root = jsonDoc.RootElement;
+
+                            if (root.TryGetProperty("username", out var usernameProp))
+                                username = usernameProp.GetString();
+                            if (root.TryGetProperty("password", out var passwordProp))
+                                password = passwordProp.GetString();
+                        }
+                        catch (JsonException)
+                        {
+                            LogError("[H] Failed to parse JSON request.");
+                            // Ignore JSON parsing errors, use random username/password
+                        }
+                    }
+                }
+
+                // Generate the public token (either random or fixed)
+                string publicToken = UseRandomToken ? GenerateRandomString(32) : FixedToken;
+
+                // Log the username, password, and public token
+                Log($"[H] Username: {username}");
+                Log($"[H] Password: {password}");
+                Log($"[H] Public Token: {publicToken}");
+
+                // Prepare response (fake login success with public token)
+                var jsonResponse = new
+                {
+                    status = "success",
+                    token = publicToken
+                };
+                string responseString = JsonSerializer.Serialize(jsonResponse, new JsonSerializerOptions { WriteIndented = true });
+
+                // Send the response to the requestor
+                HttpListenerResponse response = context.Response;
+                response.StatusCode = 200;
+                response.ContentType = "application/json";
+                byte[] buffer = Encoding.UTF8.GetBytes(responseString);
+                response.ContentLength64 = buffer.Length;
+                await response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+                response.OutputStream.Close();
+            }
+            catch (Exception ex)
+            {
+                LogError($"Request handling error: {ex.Message}");
+            }
+        }
+
+        // Generate realistic random username
+        static string GenerateRandomUsername()
+        {
+            return $"{GenerateRandomString(5)}{rng.Next(100, 999)}"; // Example: test123
+        }
+
+        // Generate realistic random password
+        static string GenerateRandomPassword()
+        {
+            return $"{GenerateRandomString(8)}{rng.Next(10, 99)}!"; // Example: pass123! 
+        }
+
+        // Generate random string of a given length (for tokens, usernames, etc.)
+        static string GenerateRandomString(int length)
+        {
+            const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            char[] buffer = new char[length];
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                buffer[i] = chars[rng.Next(chars.Length)];
+            }
+            return new string(buffer);
+        }
+
+        // Log success messages with green color
+        static void Log(string message)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+            Console.ResetColor();
+        }
+
+        // Log errors with red color
+        static void LogError(string message)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [ERROR] {message}");
+            Console.ResetColor();
+        }
+    }
+}
